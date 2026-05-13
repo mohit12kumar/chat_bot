@@ -193,7 +193,7 @@ def generate_ai_response(messages: list):
         completion = groq_client.chat.completions.create(
             model=settings.GROQ_MODEL,
             messages=messages,
-            temperature=0.7
+            temperature=2
         )
 
         return completion.choices[0].message.content
