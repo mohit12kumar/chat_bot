@@ -337,15 +337,15 @@ async def get_history(request: HistoryRequest):
 # ==================================================
 
 @app.delete(
-    "/delete",
+    "/delete/{session_id}",
     response_model=DeleteResponse
 )
-async def delete_session(request: DeleteRequest):
+async def delete_session(session_id: str):
 
     try:
 
         exists = redis_client.exists(
-            request.session_id
+            session_id
         )
 
         if not exists:
@@ -356,13 +356,13 @@ async def delete_session(request: DeleteRequest):
             )
 
         redis_client.delete(
-            request.session_id
+            session_id
         )
 
         return DeleteResponse(
             success=True,
             message="Session deleted successfully",
-            deleted_session=request.session_id
+            deleted_session=session_id
         )
 
     except HTTPException:
