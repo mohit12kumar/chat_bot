@@ -3,9 +3,9 @@ import redis
 
 from fastapi import FastAPI, HTTPException, status
 from groq import Groq
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from pydantic_settings import BaseSettings
-from redis.exceptions import RedisError
+from redis.exceptions import RedisError, ConnectionError, TimeoutError
 
 
 # ==================================================
@@ -87,6 +87,12 @@ class ChatRequest(BaseModel):
         max_length=4000
     )
 
+    @validator('message')
+    def message_must_not_be_whitespace(cls, v):
+        if not v.strip():
+            raise ValueError('Message cannot be empty or only whitespace')
+        return v.strip()
+
 
 class HistoryRequest(BaseModel):
 
@@ -148,10 +154,13 @@ def get_chat_history(session_id: str):
 
         history = redis_client.get(session_id)
 
-        if history:
-            return json.loads(history)
+        if history and not isinstance(history, list):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Chat history is corrupted (not a list)"
+            )
 
-        return []
+        return history if history else []
 
     except json.JSONDecodeError:
 
@@ -160,12 +169,28 @@ def get_chat_history(session_id: str):
             detail="Invalid history format in Redis"
         )
 
+    except (ConnectionError, TimeoutError) as e:
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Database is temporarily unavailable: {str(e)}"
+        )
+
     except RedisError as e:
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Redis Error: {str(e)}"
+            detail=f"Database Error: {str(e)}"
         )
+
+
+def prune_history(history: list, max_messages: int = 10):
+    """
+    Keep only the last N messages to stay within token limits.
+    """
+    if len(history) > max_messages:
+        return history[-max_messages:]
+    return history
 
 
 def save_chat_history(session_id: str, history: list):
@@ -193,16 +218,44 @@ def generate_ai_response(messages: list):
         completion = groq_client.chat.completions.create(
             model=settings.GROQ_MODEL,
             messages=messages,
-            temperature=2
+            temperature=0.7
         )
 
         return completion.choices[0].message.content
+
+    except groq.BadRequestError as e:
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid Request to AI (likely context limit): {str(e.message)}"
+        )
+
+    except groq.RateLimitError as e:
+
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Groq Rate Limit Exceeded: Please wait before sending more messages."
+        )
+
+    except groq.AuthenticationError as e:
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Groq Authentication Failed: Check your API Key."
+        )
+
+    except groq.APIStatusError as e:
+
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=f"Groq API Error ({e.status_code}): {str(e.message)}"
+        )
 
     except Exception as e:
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Groq API Error: {str(e)}"
+            detail=f"Unexpected AI Generation Error: {str(e)}"
         )
 
 
@@ -235,6 +288,9 @@ async def chat(request: ChatRequest):
         chat_history = get_chat_history(
             request.session_id
         )
+
+        # Prune history to keep context within limits
+        chat_history = prune_history(chat_history)
 
         # User message
         user_message = {
