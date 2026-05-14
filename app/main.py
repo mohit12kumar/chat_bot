@@ -3,6 +3,8 @@ import redis
 import groq
 
 from fastapi import FastAPI, HTTPException, status
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from groq import Groq
 from pydantic import BaseModel, Field, validator
 from pydantic_settings import BaseSettings
@@ -44,6 +46,18 @@ settings = Settings()
 app = FastAPI(
     title="Advanced Groq Context Chat Backend",
     version="4.0.0"
+)
+
+# Mount Frontend UI
+app.mount("/ui", StaticFiles(directory="frontend", html=True), name="ui")
+
+# CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -171,6 +185,9 @@ class ChatResponse(BaseModel):
     success: bool
     session_id: str
     response: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 # ==================================================
@@ -315,7 +332,14 @@ def generate_ai_response(messages: list):
             max_tokens=1024
         )
 
-        return completion.choices[0].message.content
+        return {
+            "content": completion.choices[0].message.content,
+            "usage": {
+                "prompt_tokens": completion.usage.prompt_tokens,
+                "completion_tokens": completion.usage.completion_tokens,
+                "total_tokens": completion.usage.total_tokens
+            }
+        }
 
     except groq.BadRequestError as e:
 
@@ -419,9 +443,12 @@ async def chat(request: ChatRequest):
         # Generate AI Response
         # =========================
 
-        assistant_response = generate_ai_response(
+        ai_data = generate_ai_response(
             messages
         )
+
+        assistant_content = ai_data["content"]
+        usage = ai_data["usage"]
 
         # =========================
         # Save User Message
@@ -438,7 +465,7 @@ async def chat(request: ChatRequest):
 
         chat_history.append({
             "role": "assistant",
-            "content": assistant_response
+            "content": assistant_content
         })
 
         # =========================
@@ -457,7 +484,10 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             success=True,
             session_id=request.session_id,
-            response=assistant_response
+            response=assistant_content,
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            total_tokens=usage["total_tokens"]
         )
 
     except HTTPException:

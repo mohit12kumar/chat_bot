@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Groq Context Chat | Premium AI</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="theme-default">
+    <div class="app-container">
+        <!-- Sidebar: Session Box -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>AI Sessions</h2>
+                <i data-lucide="sparkles" style="color: var(--primary)"></i>
+            </div>
+            
+            <button class="btn-new-chat" id="btn-new-chat">
+                <i data-lucide="plus"></i>
+                New Conversation
+            </button>
+
+            <div class="session-list" id="session-list">
+                <!-- Sessions will be loaded here -->
+            </div>
+        </aside>
+
+        <!-- Main Content: Message Box -->
+        <main class="main-content">
+            <header class="chat-header">
+                <div class="chat-info">
+                    <h1 id="current-session-title">Select a Session</h1>
+                    <p id="current-session-id" style="font-size: 0.8rem; color: var(--text-muted)"></p>
+                </div>
+                <div class="chat-actions">
+                    <button class="btn-close-session" id="btn-close-current" title="Close current session">
+                        <i data-lucide="trash-2"></i>
+                    </button>
+                </div>
+            </header>
+
+            <div class="chat-messages" id="chat-messages">
+                <div class="message ai">
+                    Hello! I'm your advanced AI assistant. Start a new session or select one from the sidebar to begin chatting.
+                </div>
+            </div>
+
+            <div class="chat-input-container">
+                <div class="input-wrapper">
+                    <input type="text" id="user-input" placeholder="Type your message here..." autocomplete="off">
+                    <button class="btn-send" id="btn-send">
+                        <i data-lucide="send"></i>
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+    </script>
+</body>
+</html>
