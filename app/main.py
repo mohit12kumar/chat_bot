@@ -1,5 +1,6 @@
 import json
 import redis
+import groq
 
 from fastapi import FastAPI, HTTPException, status
 from groq import Groq
@@ -17,11 +18,17 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str
     GROQ_MODEL: str
 
-    REDIS_HOST: str
-    REDIS_PORT: int
-    REDIS_DB: int
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
 
-    SYSTEM_PROMPT: str
+    SYSTEM_PROMPT: str = """
+    You are an advanced AI assistant.
+    
+    You remember previous conversations,
+    maintain context naturally,
+    and provide intelligent responses.
+    """
 
     class Config:
         env_file = ".env"
@@ -35,13 +42,66 @@ settings = Settings()
 # ==================================================
 
 app = FastAPI(
-    title="Advanced Groq Chat Backend",
-    version="3.0.0"
+    title="Advanced Groq Context Chat Backend",
+    version="4.0.0"
 )
 
 
 # ==================================================
-# Redis Client
+# Local Storage Fallback
+# ==================================================
+
+class LocalRedis:
+
+    def __init__(self):
+
+        self._storage = {}
+
+        print("⚠️ Using In-Memory Storage (Redis not found)")
+
+    def get(self, key):
+
+        return self._storage.get(key)
+
+    def set(self, key, value, ex=None):
+
+        self._storage[key] = value
+        return True
+
+    def exists(self, key):
+
+        return key in self._storage
+
+    def delete(self, *keys):
+
+        count = 0
+
+        for key in keys:
+
+            if key in self._storage:
+
+                del self._storage[key]
+                count += 1
+
+        return count
+
+    def keys(self, pattern):
+
+        if pattern == "*":
+            return list(self._storage.keys())
+
+        return [
+            k for k in self._storage.keys()
+            if k.startswith(pattern.replace("*", ""))
+        ]
+
+    def ping(self):
+
+        return True
+
+
+# ==================================================
+# Redis Initialization
 # ==================================================
 
 try:
@@ -50,14 +110,17 @@ try:
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
         db=settings.REDIS_DB,
-        decode_responses=True
+        decode_responses=True,
+        socket_connect_timeout=5
     )
 
     redis_client.ping()
 
-except RedisError as e:
+    print("✅ Connected to Redis")
 
-    raise Exception(f"Redis Connection Error: {str(e)}")
+except (RedisError, ConnectionError):
+
+    redis_client = LocalRedis()
 
 
 # ==================================================
@@ -87,29 +150,16 @@ class ChatRequest(BaseModel):
         max_length=4000
     )
 
-    @validator('message')
-    def message_must_not_be_whitespace(cls, v):
-        if not v.strip():
-            raise ValueError('Message cannot be empty or only whitespace')
-        return v.strip()
+    @validator("message")
+    def validate_message(cls, value):
 
+        if not value.strip():
 
-class HistoryRequest(BaseModel):
+            raise ValueError(
+                "Message cannot be empty"
+            )
 
-    session_id: str = Field(
-        ...,
-        min_length=2,
-        max_length=100
-    )
-
-
-class DeleteRequest(BaseModel):
-
-    session_id: str = Field(
-        ...,
-        min_length=2,
-        max_length=100
-    )
+        return value.strip()
 
 
 # ==================================================
@@ -123,27 +173,6 @@ class ChatResponse(BaseModel):
     response: str
 
 
-class HistoryResponse(BaseModel):
-
-    success: bool
-    session_id: str
-    total_messages: int
-    history: list
-
-
-class DeleteResponse(BaseModel):
-
-    success: bool
-    message: str
-    deleted_session: str
-
-
-class ErrorResponse(BaseModel):
-
-    success: bool
-    error: str
-
-
 # ==================================================
 # Helper Functions
 # ==================================================
@@ -154,43 +183,27 @@ def get_chat_history(session_id: str):
 
         history = redis_client.get(session_id)
 
-        if history and not isinstance(history, list):
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Chat history is corrupted (not a list)"
-            )
+        if not history:
+            return []
 
-        return history if history else []
+        if isinstance(history, str):
+            history = json.loads(history)
+
+        return history
 
     except json.JSONDecodeError:
 
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Invalid history format in Redis"
-        )
-
-    except (ConnectionError, TimeoutError) as e:
-
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Database is temporarily unavailable: {str(e)}"
+            status_code=500,
+            detail="Invalid history format"
         )
 
     except RedisError as e:
 
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database Error: {str(e)}"
+            status_code=500,
+            detail=f"Redis Error: {str(e)}"
         )
-
-
-def prune_history(history: list, max_messages: int = 10):
-    """
-    Keep only the last N messages to stay within token limits.
-    """
-    if len(history) > max_messages:
-        return history[-max_messages:]
-    return history
 
 
 def save_chat_history(session_id: str, history: list):
@@ -206,10 +219,90 @@ def save_chat_history(session_id: str, history: list):
     except RedisError as e:
 
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail=f"Failed to save history: {str(e)}"
         )
 
+
+# ==================================================
+# CONTEXT MANAGER
+# ==================================================
+
+def build_context(
+    history: list,
+    user_message: str,
+    max_messages: int = 12
+):
+
+    """
+    Build optimized context window
+    """
+
+    history = history[-max_messages:]
+
+    cleaned_history = []
+
+    for msg in history:
+
+        if (
+            isinstance(msg, dict)
+            and "role" in msg
+            and "content" in msg
+            and msg["content"].strip()
+        ):
+
+            cleaned_history.append(msg)
+
+    cleaned_history.append({
+        "role": "user",
+        "content": user_message
+    })
+
+    return cleaned_history
+
+
+# ==================================================
+# LONG MEMORY SUMMARIZER
+# ==================================================
+
+def summarize_old_history(history: list):
+
+    """
+    Summarize older messages
+    to reduce token usage.
+    """
+
+    if len(history) < 20:
+        return history
+
+    old_messages = history[:-10]
+
+    summary_text = ""
+
+    for msg in old_messages:
+
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+
+        summary_text += f"{role}: {content}\n"
+
+    summary_message = {
+        "role": "system",
+        "content": f"""
+        Previous conversation summary:
+
+        {summary_text[:3000]}
+        """
+    }
+
+    recent_messages = history[-10:]
+
+    return [summary_message] + recent_messages
+
+
+# ==================================================
+# AI RESPONSE GENERATOR
+# ==================================================
 
 def generate_ai_response(messages: list):
 
@@ -218,7 +311,8 @@ def generate_ai_response(messages: list):
         completion = groq_client.chat.completions.create(
             model=settings.GROQ_MODEL,
             messages=messages,
-            temperature=0.7
+            temperature=0.7,
+            max_tokens=1024
         )
 
         return completion.choices[0].message.content
@@ -226,41 +320,41 @@ def generate_ai_response(messages: list):
     except groq.BadRequestError as e:
 
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid Request to AI (likely context limit): {str(e.message)}"
+            status_code=400,
+            detail=f"Bad Request: {str(e)}"
         )
 
-    except groq.RateLimitError as e:
+    except groq.RateLimitError:
 
         raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Groq Rate Limit Exceeded: Please wait before sending more messages."
+            status_code=429,
+            detail="Rate limit exceeded"
         )
 
-    except groq.AuthenticationError as e:
+    except groq.AuthenticationError:
 
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Groq Authentication Failed: Check your API Key."
+            status_code=401,
+            detail="Invalid Groq API Key"
         )
 
     except groq.APIStatusError as e:
 
         raise HTTPException(
             status_code=e.status_code,
-            detail=f"Groq API Error ({e.status_code}): {str(e.message)}"
+            detail=f"Groq API Error: {str(e)}"
         )
 
     except Exception as e:
 
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected AI Generation Error: {str(e)}"
+            status_code=500,
+            detail=f"AI Error: {str(e)}"
         )
 
 
 # ==================================================
-# Home API
+# HOME ROUTE
 # ==================================================
 
 @app.get("/")
@@ -268,12 +362,12 @@ async def home():
 
     return {
         "success": True,
-        "message": "Advanced Groq Backend Running"
+        "message": "Advanced Groq Context Backend Running"
     }
 
 
 # ==================================================
-# Chat API
+# CHAT API WITH CONTEXT
 # ==================================================
 
 @app.post(
@@ -284,51 +378,81 @@ async def chat(request: ChatRequest):
 
     try:
 
-        # Load previous history
+        # =========================
+        # Load Previous History
+        # =========================
+
         chat_history = get_chat_history(
             request.session_id
         )
 
-        # Prune history to keep context within limits
-        chat_history = prune_history(chat_history)
+        # =========================
+        # Compress Old Messages
+        # =========================
 
-        # User message
-        user_message = {
-            "role": "user",
-            "content": request.message
-        }
+        chat_history = summarize_old_history(
+            chat_history
+        )
 
-        # System prompt
+        # =========================
+        # System Prompt
+        # =========================
+
         system_message = {
             "role": "system",
             "content": settings.SYSTEM_PROMPT
         }
 
-        # Final messages
+        # =========================
+        # Build Smart Context
+        # =========================
+
         messages = [
             system_message,
-            *chat_history,
-            user_message
+            *build_context(
+                chat_history,
+                request.message
+            )
         ]
 
-        # Generate AI response
+        # =========================
+        # Generate AI Response
+        # =========================
+
         assistant_response = generate_ai_response(
             messages
         )
 
-        # Save messages
-        chat_history.append(user_message)
+        # =========================
+        # Save User Message
+        # =========================
+
+        chat_history.append({
+            "role": "user",
+            "content": request.message
+        })
+
+        # =========================
+        # Save Assistant Message
+        # =========================
 
         chat_history.append({
             "role": "assistant",
             "content": assistant_response
         })
 
-        # Save updated history
+        # =========================
+        # Store Updated History
+        # =========================
+
         save_chat_history(
             request.session_id,
             chat_history
         )
+
+        # =========================
+        # Final Response
+        # =========================
 
         return ChatResponse(
             success=True,
@@ -342,60 +466,44 @@ async def chat(request: ChatRequest):
     except Exception as e:
 
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail=str(e)
         )
 
 
 # ==================================================
-# History API
+# GET SESSION HISTORY
 # ==================================================
 
-@app.post(
-    "/history",
-    response_model=HistoryResponse
-)
-async def get_history(request: HistoryRequest):
+@app.get("/history/{session_id}")
+async def get_history(session_id: str):
 
     try:
 
         history = get_chat_history(
-            request.session_id
+            session_id
         )
 
-        if not history:
-
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No history found for this session"
-            )
-
-        return HistoryResponse(
-            success=True,
-            session_id=request.session_id,
-            total_messages=len(history),
-            history=history
-        )
-
-    except HTTPException:
-        raise
+        return {
+            "success": True,
+            "session_id": session_id,
+            "total_messages": len(history),
+            "history": history
+        }
 
     except Exception as e:
 
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail=str(e)
         )
 
 
 # ==================================================
-# Delete Session API
+# DELETE SESSION
 # ==================================================
 
-@app.delete(
-    "/delete/{session_id}",
-    response_model=DeleteResponse
-)
+@app.delete("/delete/{session_id}")
 async def delete_session(session_id: str):
 
     try:
@@ -407,40 +515,28 @@ async def delete_session(session_id: str):
         if not exists:
 
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=404,
                 detail="Session not found"
             )
 
-        redis_client.delete(
-            session_id
-        )
+        redis_client.delete(session_id)
 
-        return DeleteResponse(
-            success=True,
-            message="Session deleted successfully",
-            deleted_session=session_id
-        )
-
-    except HTTPException:
-        raise
-
-    except RedisError as e:
-
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Redis Error: {str(e)}"
-        )
+        return {
+            "success": True,
+            "message": "Session deleted successfully",
+            "deleted_session": session_id
+        }
 
     except Exception as e:
 
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail=str(e)
         )
 
 
 # ==================================================
-# Get ALL Sessions API
+# GET ALL HISTORY
 # ==================================================
 
 @app.get("/all-history")
@@ -457,7 +553,10 @@ async def get_all_history():
             history = redis_client.get(session)
 
             if history:
-                all_history[session] = json.loads(history)
+
+                all_history[session] = json.loads(
+                    history
+                )
 
         return {
             "success": True,
@@ -468,13 +567,13 @@ async def get_all_history():
     except Exception as e:
 
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail=str(e)
         )
 
 
 # ==================================================
-# Delete ALL Sessions API
+# DELETE ALL SESSIONS
 # ==================================================
 
 @app.delete("/delete-all")
@@ -495,13 +594,29 @@ async def delete_all_sessions():
 
         return {
             "success": True,
-            "message": "All sessions deleted successfully",
+            "message": "All sessions deleted",
             "total_deleted": len(sessions)
         }
 
     except Exception as e:
 
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail=str(e)
         )
+
+
+# ==================================================
+# START SERVER
+# ==================================================
+
+if __name__ == "__main__":
+
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True
+    )

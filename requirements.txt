@@ -1,7 +1,7 @@
-redis
 fastapi
+uvicorn
+redis
 groq
 pydantic
 pydantic-settings
 python-dotenv
-uvicorn
