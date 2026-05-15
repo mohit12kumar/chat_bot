@@ -5,3 +5,4 @@ groq
 pydantic
 pydantic-settings
 python-dotenv
+mysql-connector-python

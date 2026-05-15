@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body class="theme-default">
     <div class="app-container">
@@ -24,6 +25,10 @@
                 New Conversation
             </button>
 
+            <div class="search-container" style="margin-top: 1rem; padding: 0 1rem;">
+                <input type="text" id="session-search" placeholder="Search Session ID..." style="width: 100%; padding: 0.6rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white; outline: none; font-family: inherit;">
+            </div>
+
             <div class="session-list" id="session-list">
                 <!-- Sessions will be loaded here -->
             </div>
@@ -36,10 +41,18 @@
                     <h1 id="current-session-title">Select a Session</h1>
                     <p id="current-session-id" style="font-size: 0.8rem; color: var(--text-muted)"></p>
                 </div>
-                <div class="chat-actions">
-                    <button class="btn-close-session" id="btn-close-current" title="Close current session">
-                        <i data-lucide="trash-2"></i>
+                <div class="chat-actions" style="position: relative;">
+                    <button class="btn-close-session" id="btn-session-menu" title="Session Options" onclick="document.getElementById('header-dropdown').style.display = document.getElementById('header-dropdown').style.display === 'none' ? 'block' : 'none'; event.stopPropagation();">
+                        <i data-lucide="more-vertical"></i>
                     </button>
+                    <div id="header-dropdown" class="dropdown-menu" style="display: none; position: absolute; right: 0; top: 100%; background: rgba(30, 30, 46, 0.95); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 0.5rem; z-index: 100; min-width: 120px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
+                        <button id="btn-delete-current" style="display: flex; align-items: center; gap: 0.5rem; width: 100%; padding: 0.5rem; background: none; border: none; color: #ff4d4f; cursor: pointer; text-align: left; font-family: inherit; font-size: 0.9rem; border-radius: 4px;">
+                            <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i> Delete
+                        </button>
+                        <button id="btn-archive-current" style="display: flex; align-items: center; gap: 0.5rem; width: 100%; padding: 0.5rem; background: none; border: none; color: white; cursor: pointer; text-align: left; font-family: inherit; font-size: 0.9rem; border-radius: 4px;">
+                            <i data-lucide="archive" style="width: 16px; height: 16px;"></i> Archive
+                        </button>
+                    </div>
                 </div>
             </header>
 
