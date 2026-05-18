@@ -6,3 +6,8 @@ pydantic
 pydantic-settings
 python-dotenv
 mysql-connector-python
+chromadb
+PyMuPDF
+python-multipart
+langchain
+langchain-text-splitters

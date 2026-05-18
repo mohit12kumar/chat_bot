@@ -25,9 +25,23 @@
                 New Conversation
             </button>
 
-            <div class="search-container" style="margin-top: 1rem; padding: 0 1rem;">
-                <input type="text" id="session-search" placeholder="Search Session ID..." style="width: 100%; padding: 0.6rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white; outline: none; font-family: inherit;">
+            <!-- RAG Document Upload -->
+            <div class="upload-container" style="margin-top: 1rem; padding: 0 1rem;">
+                <label for="doc-upload" style="display: flex; align-items: center; justify-content: center; gap: 0.5rem; width: 100%; padding: 0.8rem; background: rgba(255,255,255,0.05); border: 1px dashed rgba(255,255,255,0.2); border-radius: 8px; color: white; cursor: pointer; font-size: 0.9rem; transition: 0.2s;">
+                    <i data-lucide="upload-cloud" style="width: 18px; height: 18px;"></i>
+                    <span id="upload-label">Upload Book (PDF/TXT)</span>
+                </label>
+                <input type="file" id="doc-upload" accept=".pdf,.txt" style="display: none;">
+                <div id="upload-status" style="display: none; text-align: center; font-size: 0.85rem; margin-top: 0.5rem; padding: 0.4rem; border-radius: 4px;"></div>
             </div>
+
+            <div class="search-container" style="margin-top: 1rem; padding: 0 1rem; display: flex; gap: 0.5rem; align-items: center;">
+                <input type="text" id="session-search" placeholder="Search chats..." style="flex: 1; padding: 0.6rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white; outline: none; font-family: inherit; width: 100%;">
+                <button id="btn-search" style="padding: 0.6rem; border-radius: 8px; border: none; background: rgba(255,255,255,0.1); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center;">
+                    <i data-lucide="search" style="width: 18px; height: 18px;"></i>
+                </button>
+            </div>
+            <div id="search-error" style="display: none; text-align: center; color: #ff4d4f; font-size: 0.85rem; margin-top: 0.5rem;">No sessions found matching your search.</div>
 
             <div class="session-list" id="session-list">
                 <!-- Sessions will be loaded here -->

@@ -2,8 +2,13 @@ import json
 import mysql.connector
 from mysql.connector import errorcode
 import groq
+import fitz
+import chromadb
+import uuid
+import os
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, UploadFile, File, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -139,6 +144,14 @@ groq_client = Groq(
     api_key=settings.GROQ_API_KEY
 )
 
+# ==================================================
+# ChromaDB Vector Store
+# ==================================================
+
+os.makedirs("chroma_data", exist_ok=True)
+chroma_client = chromadb.PersistentClient(path="chroma_data")
+collection = chroma_client.get_or_create_collection(name="document_collection")
+
 
 # ==================================================
 # Request Models
@@ -192,8 +205,15 @@ def get_chat_history(session_id: str):
     try:
         conn = db_manager.get_connection()
         cursor = conn.cursor(dictionary=True)
-        query = "SELECT role, content FROM chat_history WHERE session_id = %s ORDER BY created_at ASC"
-        cursor.execute(query, (session_id,))
+        query = """
+            SELECT role, content FROM (
+                SELECT role, content, created_at FROM chat_history WHERE session_id = %s
+                UNION
+                SELECT role, content, created_at FROM archived_chat_history WHERE session_id = %s
+            ) AS combined
+            ORDER BY created_at ASC
+        """
+        cursor.execute(query, (session_id, session_id))
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -352,6 +372,76 @@ async def home():
 
 
 # ==================================================
+# DOCUMENT UPLOAD FOR RAG
+# ==================================================
+
+@app.post("/upload-document")
+async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    try:
+        if not file.filename.lower().endswith((".pdf", ".txt")):
+            raise HTTPException(status_code=400, detail="Only PDF and TXT files are supported.")
+            
+        content = await file.read()
+        
+        # Pass the heavy processing to the background
+        background_tasks.add_task(process_document_in_background, file.filename, content)
+        
+        return {"success": True, "message": f"Upload complete! {file.filename} is now processing in the background."}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def process_document_in_background(filename: str, content: bytes):
+    try:
+        text = ""
+        
+        if filename.lower().endswith(".pdf"):
+            doc = fitz.open(stream=content, filetype="pdf")
+            for page in doc:
+                text += page.get_text()
+        elif filename.lower().endswith(".txt"):
+            try:
+                text = content.decode("utf-8")
+            except UnicodeDecodeError:
+                text = content.decode("latin-1", errors="replace")
+                
+        if not text.strip():
+            print(f"[!] No text could be extracted from {filename}.")
+            return
+            
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+        )
+        chunks = splitter.split_text(text)
+        
+        documents = []
+        ids = []
+        metadatas = []
+        
+        for i, chunk in enumerate(chunks):
+            documents.append(chunk)
+            ids.append(f"{filename}_{uuid.uuid4()}_{i}")
+            metadatas.append({"source": filename, "chunk": i})
+            
+        if documents:
+            # Batch additions to ChromaDB to prevent memory spikes for massive 16MB files
+            batch_size = 100
+            for i in range(0, len(documents), batch_size):
+                batch_docs = documents[i:i+batch_size]
+                batch_ids = ids[i:i+batch_size]
+                batch_metas = metadatas[i:i+batch_size]
+                collection.add(documents=batch_docs, metadatas=batch_metas, ids=batch_ids)
+                
+            print(f"[+] Successfully processed and indexed {len(chunks)} paragraphs from {filename}.")
+            
+    except Exception as e:
+        print(f"[!] Error processing document {filename} in background: {str(e)}")
+
+
+# ==================================================
 # CHAT API WITH CONTEXT
 # ==================================================
 
@@ -363,9 +453,31 @@ async def chat(request: ChatRequest):
         # 1. Load History
         chat_history = get_chat_history(request.session_id)
 
-        # 2. Build Context
+        # 2. RAG Retrieval
+        rag_context = ""
+        try:
+            if collection.count() > 0:
+                results = collection.query(
+                    query_texts=[request.message],
+                    n_results=3
+                )
+                
+                if results and results.get("documents") and results["documents"][0]:
+                    retrieved_chunks = results["documents"][0]
+                    if retrieved_chunks:
+                        rag_context = "Context from uploaded documents:\n" + "\n---\n".join(retrieved_chunks) + "\n\n"
+        except Exception as db_err:
+            print(f"[!] ChromaDB retrieval error: {db_err}")
+            # Non-fatal, continue without context
+
+        # 3. Build Context
         chat_history = summarize_old_history(chat_history)
-        system_message = {"role": "system", "content": settings.SYSTEM_PROMPT}
+        
+        system_content = settings.SYSTEM_PROMPT
+        if rag_context:
+            system_content += f"\n\n{rag_context}\nPlease use the above context to answer the user's question. If the requested information is not available in the uploaded document, rely on your general knowledge to answer."
+
+        system_message = {"role": "system", "content": system_content}
         
         messages = [
             system_message,
@@ -492,8 +604,13 @@ async def delete_session(session_id: str):
     try:
         conn = db_manager.get_connection()
         cursor = conn.cursor()
+        
         cursor.execute("DELETE FROM chat_history WHERE session_id = %s", (session_id,))
         deleted_count = cursor.rowcount
+        
+        cursor.execute("DELETE FROM archived_chat_history WHERE session_id = %s", (session_id,))
+        deleted_count += cursor.rowcount
+        
         conn.commit()
         cursor.close()
         conn.close()
@@ -510,7 +627,12 @@ async def get_all_history():
     try:
         conn = db_manager.get_connection()
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT session_id, role, content FROM chat_history ORDER BY session_id, created_at")
+        cursor.execute("""
+            SELECT session_id, role, content, created_at, 0 as is_archived FROM chat_history
+            UNION
+            SELECT session_id, role, content, created_at, 1 as is_archived FROM archived_chat_history
+            ORDER BY session_id, created_at
+        """)
         rows = cursor.fetchall()
         
         all_history = {}
@@ -518,7 +640,11 @@ async def get_all_history():
             sid = row['session_id']
             if sid not in all_history:
                 all_history[sid] = []
-            all_history[sid].append({"role": row['role'], "content": row['content']})
+            all_history[sid].append({
+                "role": row['role'], 
+                "content": row['content'],
+                "is_archived": bool(row['is_archived'])
+            })
             
         cursor.close()
         conn.close()

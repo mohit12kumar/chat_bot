@@ -166,19 +166,43 @@ btnNewChat.onclick = () => {
 
 // --- Session Search Logic ---
 const sessionSearch = document.getElementById('session-search');
-if (sessionSearch) {
-    sessionSearch.addEventListener('input', (e) => {
-        const query = e.target.value.toLowerCase();
-        const items = document.querySelectorAll('.session-item');
-        items.forEach(item => {
-            const sessionIdText = item.querySelector('.session-id').textContent.toLowerCase();
-            if (sessionIdText.includes(query)) {
-                item.style.display = 'flex';
-            } else {
-                item.style.display = 'none';
-            }
-        });
+const btnSearch = document.getElementById('btn-search');
+const searchError = document.getElementById('search-error');
+
+function performSearch() {
+    if (!sessionSearch) return;
+    const query = sessionSearch.value.toLowerCase();
+    const items = document.querySelectorAll('.session-item');
+    let foundCount = 0;
+    
+    items.forEach(item => {
+        const sessionInfoText = item.querySelector('.session-info').textContent.toLowerCase();
+        if (sessionInfoText.includes(query)) {
+            item.style.display = 'flex';
+            foundCount++;
+        } else {
+            item.style.display = 'none';
+        }
     });
+
+    if (searchError) {
+        if (foundCount === 0 && items.length > 0) {
+            searchError.style.display = 'block';
+        } else {
+            searchError.style.display = 'none';
+        }
+    }
+}
+
+if (sessionSearch) {
+    sessionSearch.addEventListener('input', performSearch);
+    sessionSearch.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') performSearch();
+    });
+}
+
+if (btnSearch) {
+    btnSearch.addEventListener('click', performSearch);
 }
 
 // --- Messaging ---
@@ -383,3 +407,63 @@ async function archiveSession(id) {
 
 // Start the app
 init();
+
+// --- RAG Document Upload Logic ---
+const docUpload = document.getElementById('doc-upload');
+const uploadLabel = document.getElementById('upload-label');
+const uploadStatus = document.getElementById('upload-status');
+
+if (docUpload) {
+    docUpload.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        uploadLabel.textContent = 'Uploading...';
+        if (uploadStatus) uploadStatus.style.display = 'none';
+        
+        try {
+            const response = await fetch(`${API_BASE_URL}/upload-document`, {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+            
+            if (response.ok) {
+                if (uploadStatus) {
+                    uploadStatus.style.display = 'block';
+                    uploadStatus.style.color = '#52c41a';
+                    uploadStatus.style.background = 'rgba(82, 196, 26, 0.1)';
+                    uploadStatus.textContent = '✓ ' + data.message;
+                }
+                uploadLabel.textContent = 'Upload Book (PDF/TXT)';
+            } else {
+                if (uploadStatus) {
+                    uploadStatus.style.display = 'block';
+                    uploadStatus.style.color = '#ff4d4f';
+                    uploadStatus.style.background = 'rgba(255, 77, 79, 0.1)';
+                    uploadStatus.textContent = '✗ Error: ' + data.detail;
+                }
+                uploadLabel.textContent = 'Upload Failed';
+            }
+        } catch (err) {
+            console.error('Upload failed:', err);
+            if (uploadStatus) {
+                uploadStatus.style.display = 'block';
+                uploadStatus.style.color = '#ff4d4f';
+                uploadStatus.style.background = 'rgba(255, 77, 79, 0.1)';
+                uploadStatus.textContent = '✗ Upload failed. Check console.';
+            }
+            uploadLabel.textContent = 'Upload Failed';
+        }
+        
+        // Reset input
+        docUpload.value = '';
+        setTimeout(() => { 
+            uploadLabel.textContent = 'Upload Book (PDF/TXT)'; 
+            if (uploadStatus) uploadStatus.style.display = 'none';
+        }, 5000);
+    });
+}
