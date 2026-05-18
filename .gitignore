@@ -1,0 +1,17 @@
+# Virtual Environments
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Local Databases (Do NOT upload to GitHub)
+chroma_data/
+
+# Environment Variables (Keep API keys secret!)
+.env
+
+# Uploaded Files
+*.pdf
+*.txt

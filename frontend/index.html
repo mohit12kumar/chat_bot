@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Groq Context Chat | Premium AI</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body class="theme-default">
+    <div class="app-container">
+        <!-- Sidebar: Session Box -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>AI Sessions</h2>
+                <i data-lucide="sparkles" style="color: var(--primary)"></i>
+            </div>
+            
+            <button class="btn-new-chat" id="btn-new-chat">
+                <i data-lucide="plus"></i>
+                New Conversation
+            </button>
+
+            <!-- RAG Document Upload -->
+            <div class="upload-container" style="margin-top: 1rem; padding: 0 1rem;">
+                <label for="doc-upload" style="display: flex; align-items: center; justify-content: center; gap: 0.5rem; width: 100%; padding: 0.8rem; background: rgba(255,255,255,0.05); border: 1px dashed rgba(255,255,255,0.2); border-radius: 8px; color: white; cursor: pointer; font-size: 0.9rem; transition: 0.2s;">
+                    <i data-lucide="upload-cloud" style="width: 18px; height: 18px;"></i>
+                    <span id="upload-label">Upload Book (PDF/TXT)</span>
+                </label>
+                <input type="file" id="doc-upload" accept=".pdf,.txt" style="display: none;">
+                <div id="upload-status" style="display: none; text-align: center; font-size: 0.85rem; margin-top: 0.5rem; padding: 0.4rem; border-radius: 4px;"></div>
+            </div>
+
+            <div class="search-container" style="margin-top: 1rem; padding: 0 1rem; display: flex; gap: 0.5rem; align-items: center;">
+                <input type="text" id="session-search" placeholder="Search chats..." style="flex: 1; padding: 0.6rem 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white; outline: none; font-family: inherit; width: 100%;">
+                <button id="btn-search" style="padding: 0.6rem; border-radius: 8px; border: none; background: rgba(255,255,255,0.1); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center;">
+                    <i data-lucide="search" style="width: 18px; height: 18px;"></i>
+                </button>
+            </div>
+            <div id="search-error" style="display: none; text-align: center; color: #ff4d4f; font-size: 0.85rem; margin-top: 0.5rem;">No sessions found matching your search.</div>
+
+            <div class="session-list" id="session-list">
+                <!-- Sessions will be loaded here -->
+            </div>
+        </aside>
+
+        <!-- Main Content: Message Box -->
+        <main class="main-content">
+            <header class="chat-header">
+                <div class="chat-info" style="display: flex; align-items: center; gap: 1rem;">
+                    <button id="btn-toggle-sidebar" class="mobile-only" style="background:none; border:none; color:white; cursor:pointer;" title="Toggle Menu">
+                        <i data-lucide="menu"></i>
+                    </button>
+                    <div>
+                        <h1 id="current-session-title">Select a Session</h1>
+                        <p id="current-session-id" style="font-size: 0.8rem; color: var(--text-muted)"></p>
+                    </div>
+                </div>
+                <div class="chat-actions" style="position: relative;">
+                    <button class="btn-close-session" id="btn-session-menu" title="Session Options" onclick="document.getElementById('header-dropdown').style.display = document.getElementById('header-dropdown').style.display === 'none' ? 'block' : 'none'; event.stopPropagation();">
+                        <i data-lucide="more-vertical"></i>
+                    </button>
+                    <div id="header-dropdown" class="dropdown-menu" style="display: none; position: absolute; right: 0; top: 100%; background: rgba(30, 30, 46, 0.95); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 0.5rem; z-index: 100; min-width: 120px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
+                        <button id="btn-delete-current" style="display: flex; align-items: center; gap: 0.5rem; width: 100%; padding: 0.5rem; background: none; border: none; color: #ff4d4f; cursor: pointer; text-align: left; font-family: inherit; font-size: 0.9rem; border-radius: 4px;">
+                            <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i> Delete
+                        </button>
+                        <button id="btn-archive-current" style="display: flex; align-items: center; gap: 0.5rem; width: 100%; padding: 0.5rem; background: none; border: none; color: white; cursor: pointer; text-align: left; font-family: inherit; font-size: 0.9rem; border-radius: 4px;">
+                            <i data-lucide="archive" style="width: 16px; height: 16px;"></i> Archive
+                        </button>
+                    </div>
+                </div>
+            </header>
+
+            <div class="chat-messages" id="chat-messages">
+                <div class="message ai">
+                    Hello! I'm your advanced AI assistant. Start a new session or select one from the sidebar to begin chatting.
+                </div>
+            </div>
+
+            <div class="chat-input-container">
+                <div class="input-wrapper">
+                    <input type="text" id="user-input" placeholder="Type your message here..." autocomplete="off">
+                    <button class="btn-send" id="btn-send">
+                        <i data-lucide="send"></i>
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+    </script>
+</body>
+</html>

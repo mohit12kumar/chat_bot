@@ -1,0 +1,224 @@
+import streamlit as st
+import requests
+import json
+import uuid
+
+# Configuration
+API_URL = "http://127.0.0.1:8001"
+
+st.set_page_config(page_title="Rude AI Chat", page_icon="😠", layout="wide")
+
+def inject_custom_css():
+    st.markdown("""
+        <style>
+        /* Main background gradient */
+        .stApp {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        }
+        
+        /* Text styling */
+        p, span, div, label {
+            color: #000000 !important;
+        }
+        
+        /* Sidebar styling */
+        [data-testid="stSidebar"] {
+            background-color: rgba(255, 255, 255, 0.8) !important;
+            backdrop-filter: blur(10px);
+            border-right: 2px solid #e1e4e8;
+        }
+        
+        /* Stylish rounded buttons with hover effects */
+        .stButton>button {
+            background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+            color: white !important;
+            border-radius: 20px;
+            border: none;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .stButton>button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+            background: linear-gradient(90deg, #00f2fe 0%, #4facfe 100%);
+        }
+        
+        /* Colorful headers */
+        h1, h2, h3 {
+            color: #000000 !important;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        /* Chat Input */
+        .stChatInputContainer {
+            border-radius: 20px !important;
+            border: 2px solid #4facfe !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+inject_custom_css()
+
+# --- Session State Initialization ---
+if "session_id" not in st.session_state:
+    st.session_state.session_id = f"session_{uuid.uuid4().hex[:8]}"
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# --- Sidebar ---
+with st.sidebar:
+    st.title("😠 Rude RAG Chatbot")
+    
+    # 1. Document Upload
+    st.header("Document Upload")
+    st.write("Upload a PDF or TXT if you must. I won't enjoy reading it.")
+    uploaded_file = st.file_uploader("Upload Book/Doc", type=["pdf", "txt"])
+    
+    if st.button("upload document") and uploaded_file:
+        with st.spinner("Ugh, uploading..."):
+            files = {"file": (uploaded_file.name, uploaded_file.getvalue())}
+            try:
+                res = requests.post(f"{API_URL}/upload-document", files=files)
+                if res.status_code == 200:
+                    st.success(res.json().get("message", "Fine, it's uploaded."))
+                else:
+                    st.error(f"Error: {res.text}")
+            except Exception as e:
+                st.error(f"Connection error: Is my server on port 8001 even running? Error: {e}")
+                
+    st.divider()
+    
+    # 2. Session Management
+    st.header("Session Management")
+    st.write(f"**Current:** `{st.session_state.session_id}`")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("➕ New"):
+            st.session_state.session_id = f"session_{uuid.uuid4().hex[:8]}"
+            st.session_state.messages = []
+            st.rerun()
+    with col2:
+        if st.button("📦 Archive"):
+            try:
+                requests.post(f"{API_URL}/archive/{st.session_state.session_id}")
+                st.success("Archived!")
+                st.session_state.session_id = f"session_{uuid.uuid4().hex[:8]}"
+                st.session_state.messages = []
+                st.rerun()
+            except Exception as e:
+                st.error("Error")
+    with col3:
+        if st.button("🗑️ Delete"):
+            try:
+                requests.delete(f"{API_URL}/delete/{st.session_state.session_id}")
+                st.success("Deleted!")
+                st.session_state.session_id = f"session_{uuid.uuid4().hex[:8]}"
+                st.session_state.messages = []
+                st.rerun()
+            except Exception as e:
+                st.error("Error")
+
+    st.divider()
+    
+    # 3. History & Search
+    st.header("Previous Awful Sessions")
+    search_query = st.text_input("🔍 Search your garbage history...", "")
+    
+    try:
+        all_hist_res = requests.get(f"{API_URL}/all-history")
+        if all_hist_res.status_code == 200:
+            all_sessions = all_hist_res.json().get("data", {})
+            
+            if not all_sessions:
+                st.write("Wow, empty. Keep it that way.")
+            else:
+                for s_id, msgs in reversed(list(all_sessions.items())):
+                    preview = "New Chat"
+                    is_archived = False
+                    if msgs:
+                        preview = msgs[-1].get("content", "")[:30] + "..."
+                        is_archived = msgs[-1].get("is_archived", False)
+                    
+                    display_title = f"📦 [Archived] {preview}" if is_archived else f"💬 {preview}"
+                    
+                    if search_query.lower() in s_id.lower() or search_query.lower() in preview.lower():
+                        with st.expander(display_title):
+                            st.caption(f"ID: {s_id}")
+                            if st.button("Load Session", key=f"load_{s_id}"):
+                                st.session_state.session_id = s_id
+                                st.session_state.messages = []
+                                st.rerun()
+        else:
+            st.write("Failed to load your messy history.")
+    except Exception as e:
+        st.write("Could not connect to database. Good.")
+
+# --- Main Chat Interface ---
+st.title("Chat with the grumpy AI")
+
+# Load existing history from backend if our local state is empty
+if not st.session_state.messages:
+    try:
+        hist_res = requests.get(f"{API_URL}/history/{st.session_state.session_id}")
+        if hist_res.status_code == 200:
+            history = hist_res.json().get("history", [])
+            for msg in history:
+                role = "assistant" if msg["role"] in ["assistant", "system"] else "user"
+                st.session_state.messages.append({
+                    "role": role,
+                    "content": msg["content"]
+                })
+    except:
+        pass
+
+# Display chat messages
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# Chat Input
+if prompt := st.chat_input("Ask a stupid question..."):
+    # Append and show user message
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # Append and stream assistant response
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        full_response = ""
+        
+        try:
+            # Send streaming request to FastAPI backend
+            response = requests.post(
+                f"{API_URL}/chat",
+                json={"session_id": st.session_state.session_id, "message": prompt},
+                stream=True
+            )
+            
+            if response.status_code == 200:
+                for line in response.iter_lines():
+                    if line:
+                        decoded_line = line.decode('utf-8')
+                        try:
+                            data = json.loads(decoded_line)
+                            
+                            if "text" in data and not data.get("done", False):
+                                full_response += data["text"]
+                                message_placeholder.markdown(full_response + "▌")
+                                
+                            elif data.get("done", False):
+                                full_response = data.get("full_content", full_response)
+                                message_placeholder.markdown(full_response)
+                                
+                        except json.JSONDecodeError:
+                            continue
+                
+                st.session_state.messages.append({"role": "assistant", "content": full_response})
+            else:
+                st.error(f"Server is annoyed: {response.text}")
+                
+        except Exception as e:
+            st.error(f"Can't reach the backend. Good. Error: {e}")
